@@ -4,42 +4,45 @@ import connectMongoDB from "@/app/lib/db";
 import UserModel from "@/app/models/user/schema";
 import { NextResponse } from "next/server";
 
-// ✅ Make CORS headers reusable everywhere
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*", // Change to your frontend domain in production
+// ✅ Dynamic CORS from .env
+const allowedDomains = process.env.NEXT_PUBLIC_ALLOWED_DOMAINS
+  ? process.env.NEXT_PUBLIC_ALLOWED_DOMAINS.split(",")
+  : [];
+
+const corsHeaders = (origin) => ({
+  "Access-Control-Allow-Origin": allowedDomains.includes(origin) ? origin : "*",
   "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
+});
 
 // Handle CORS preflight
-export async function OPTIONS() {
+export async function OPTIONS(req) {
+  const origin = req.headers.get("origin") || "*";
   return new NextResponse(null, {
     status: 204,
-    headers: corsHeaders,
+    headers: corsHeaders(origin),
   });
 }
 
-// PUT: Replace existing record in both MongoDB and Firestore
+// PUT: Update record in MongoDB + Firestore
 export async function PUT(req) {
   try {
-    // Get query params
+    const origin = req.headers.get("origin") || "*";
     const { searchParams } = new URL(req.url);
     const email = searchParams.get("email");
     const domain = searchParams.get("domain");
 
-    // Get body
     const body = await req.json();
     const { name } = body;
 
-    // Validate
     if (!name || !email || !domain) {
       return NextResponse.json(
         { error: "Missing required fields" },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders(origin) }
       );
     }
 
-    /** 1️⃣ MongoDB Update **/
+    // ✅ MongoDB update
     await connectMongoDB();
     const mongoDoc = await UserModel.findOneAndUpdate(
       { email, domain },
@@ -50,11 +53,11 @@ export async function PUT(req) {
     if (!mongoDoc) {
       return NextResponse.json(
         { error: "User not found in MongoDB" },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders(origin) }
       );
     }
 
-    /** 2️⃣ Firestore Update **/
+    // ✅ Firestore update
     const usersRef = collection(db, "users");
     const q = query(usersRef, where("email", "==", email), where("domain", "==", domain));
     const querySnapshot = await getDocs(q);
@@ -62,7 +65,7 @@ export async function PUT(req) {
     if (querySnapshot.empty) {
       return NextResponse.json(
         { error: "User not found in Firestore" },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders(origin) }
       );
     }
 
@@ -77,16 +80,15 @@ export async function PUT(req) {
         success: true,
         mongoId: mongoDoc._id,
         firebaseId: querySnapshot.docs[0].id,
-        message: "Record replaced successfully in both MongoDB and Firestore",
+        message: "Record updated successfully in both MongoDB and Firestore",
       },
-      { status: 200, headers: corsHeaders }
+      { status: 200, headers: corsHeaders(origin) }
     );
-
   } catch (error) {
     console.error("PUT error:", error);
     return NextResponse.json(
       { error: error.message },
-      { status: 500, headers: corsHeaders }
+      { status: 500, headers: corsHeaders("*") }
     );
   }
 }
